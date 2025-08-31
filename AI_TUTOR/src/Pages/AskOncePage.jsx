@@ -1,66 +1,62 @@
 
+
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import "../index.css";
-import Mascot from "../components/Mascot.jsx";
+import { getMascotAudio, publishMascotAudio } from "../lib/mascotAudio";
 
 const API_BASE = "http://127.0.0.1:8000";
 
-function FixedMascot({ audioEl }) {
-  return createPortal(
-    <div
-      style={{
-        position: "fixed",
-        right: 16,
-        bottom: "calc(var(--composer-gap, 160px) + 16px)",
-        zIndex: 50,
-      }}
-    >
-      <Mascot audioEl={audioEl} />
-    </div>,
-    document.body
-  );
+async function waitAF(ms = 0) {
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  if (ms) await new Promise(r => setTimeout(r, ms));
+}
+function once(target, type) {
+  return new Promise(resolve => {
+    const h = () => { target.removeEventListener(type, h); resolve(); };
+    target.addEventListener(type, h, { once: true });
+  });
+}
+async function waitUntilPlayable(el) {
+  if (el.readyState >= 2) return;
+  await Promise.race([once(el, "canplay"), once(el, "loadeddata")]);
 }
 
 export default function AskOncePage() {
   const [q, setQ] = useState("");
-  const [pair, setPair] = useState(null); 
+  const [pair, setPair] = useState(null);
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
 
- 
-  const audioElRef = useRef(null);
+  // use the global singleton, not a per-page ref
+  const audioEl = getMascotAudio();
   const currentUrlRef = useRef(null);
 
-  
+  // attach/detach page-specific handlers
+  useEffect(() => {
+    const onended = () => setSpeaking(false);
+    const onerror = () => setSpeaking(false);
+    audioEl.addEventListener("ended", onended);
+    audioEl.addEventListener("error", onerror);
+    // (re)publish in case this page mounted first
+    publishMascotAudio(audioEl);
+    return () => {
+      audioEl.removeEventListener("ended", onended);
+      audioEl.removeEventListener("error", onerror);
+    };
+  }, [audioEl]);
+
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
-
 
   const composerRef = useRef(null);
   const listRef = useRef(null);
   const bottomRef = useRef(null);
 
-
-  function ensureAudioEl() {
-    if (!audioElRef.current) {
-      const el = new Audio();
-      el.preload = "auto";
-      el.onended = () => setSpeaking(false);
-      el.onerror = () => setSpeaking(false);
-      audioElRef.current = el;
-    }
-    return audioElRef.current;
-  }
-
   function stopAudio() {
-    const el = audioElRef.current;
-    if (el) {
-      try { el.pause(); } catch {}
-      try { el.currentTime = 0; } catch {}
-    }
+    try { audioEl.pause(); } catch {}
+    try { audioEl.currentTime = 0; } catch {}
     if (currentUrlRef.current) {
       try { URL.revokeObjectURL(currentUrlRef.current); } catch {}
       currentUrlRef.current = null;
@@ -71,14 +67,18 @@ export default function AskOncePage() {
   async function playBlob(blob) {
     if (!blob) return;
     stopAudio();
-    const el = ensureAudioEl();
     const url = URL.createObjectURL(blob);
     currentUrlRef.current = url;
-    el.src = url;
-    setSpeaking(true);
-    try { await el.play(); } catch { setSpeaking(false); }
-  }
+    audioEl.src = url;
 
+    // make sure Mascot has the element & had a render tick
+    publishMascotAudio(audioEl);
+    await waitAF();
+    await waitUntilPlayable(audioEl);
+
+    setSpeaking(true);
+    try { await audioEl.play(); } catch { setSpeaking(false); }
+  }
 
   async function callQuery(question) {
     const res = await fetch(`${API_BASE}/query`, {
@@ -87,7 +87,7 @@ export default function AskOncePage() {
       body: JSON.stringify({ question }),
     });
     if (!res.ok) throw new Error(await res.text());
-    return res.json(); 
+    return res.json();
   }
 
   async function callSTT(blob, filename = "recording.webm") {
@@ -96,7 +96,7 @@ export default function AskOncePage() {
     form.append("language_code", "en");
     const res = await fetch(`${API_BASE}/stt`, { method: "POST", body: form });
     if (!res.ok) throw new Error(await res.text());
-    return res.json(); 
+    return res.json();
   }
 
   async function callTTS(text) {
@@ -111,7 +111,7 @@ export default function AskOncePage() {
       console.error("TTS /tts failed:", res.status, body);
       throw new Error(body.detail || `TTS ${res.status}`);
     }
-    return res.blob(); 
+    return res.blob();
   }
 
   // ---------- Mic (STT) ----------
@@ -161,13 +161,12 @@ export default function AskOncePage() {
 
   function toggleListening() {
     if (!listening) {
-      stopAudio(); 
+      stopAudio();
       startRecording();
     } else {
       stopRecording();
     }
   }
-
 
   async function ask() {
     const question = q.trim();
@@ -195,9 +194,8 @@ export default function AskOncePage() {
   }
 
   function onReadClick() {
-    const el = audioElRef.current;
     if (!pair?.audioBlob) return;
-    if (el && !el.paused && !el.ended) {
+    if (!audioEl.paused && !audioEl.ended) {
       stopAudio();
     } else {
       playBlob(pair.audioBlob);
@@ -225,15 +223,14 @@ export default function AskOncePage() {
         mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
       }
       stopAudio();
+      // do NOT null the global; the docked Mascot depends on it
     };
   }, []);
-
 
   useEffect(() => {
     window.__clearAskUI = () => { setQ(""); setPair(null); stopAudio(); };
     return () => { delete window.__clearAskUI; };
   }, []);
-
 
   useEffect(() => {
     const el = listRef.current;
@@ -246,9 +243,6 @@ export default function AskOncePage() {
       <div className="content">
         <div className="content-inner">
           <h1>Query Once — no conversation memory (use Chat for that)</h1>
-
-
-          <FixedMascot audioEl={audioElRef.current} />
 
           <ul className="messages" ref={listRef} style={{ listStyle: "none", padding: 0 }}>
             {pair && (
@@ -301,4 +295,3 @@ export default function AskOncePage() {
     </div>
   );
 }
-
