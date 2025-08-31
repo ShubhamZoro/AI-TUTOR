@@ -42,7 +42,6 @@ DEFAULT_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}})
 
-# Optional ElevenLabs client
 el = ElevenLabs(api_key=ELEVEN_API_KEY)
 
 # ------------ LLMs / Embeddings ------------
@@ -50,8 +49,6 @@ ASK_ONCE_LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
 CHAT_LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
 embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 
-# ------------ Vector DB (IN-MEMORY, NOT PERSISTENT) ------------
-# Omit persist_directory to keep Chroma in-memory only.
 vector_store = Chroma(
     collection_name="pdf_collection",
     embedding_function=embeddings,
@@ -93,7 +90,6 @@ def get_history(session_id: str) -> ChatMessageHistory:
         SESSION_HISTORIES[session_id] = ChatMessageHistory()
     return SESSION_HISTORIES[session_id]
 
-# ⚠️ FIX: Accept either a session_id string OR a config dict
 def history_factory(config_or_session):
     """
     Supports both calling conventions used across LangChain versions:
@@ -119,10 +115,8 @@ CHAT_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-# Runnable: prompt -> llm -> string
 chat_core_chain = CHAT_PROMPT | CHAT_LLM | StrOutputParser()
 
-# Wrap with message history (no legacy Memory classes)
 chat_chain_with_history = RunnableWithMessageHistory(
     chat_core_chain,
     history_factory,  # <-- fixed here
@@ -273,3 +267,4 @@ def tts():
 if __name__ == "__main__":
     # debug=True is fine for local dev; set to False in prod
     app.run(host="0.0.0.0", port=8000, debug=True)
+
