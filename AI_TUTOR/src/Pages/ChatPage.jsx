@@ -1,31 +1,31 @@
 
+
+
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import "../index.css";
-import Mascot from "../components/Mascot.jsx";
+import { getMascotAudio, publishMascotAudio } from "../lib/mascotAudio";
 
-const API_BASE =  "http://127.0.0.1:8000";
+const API_BASE = "http://127.0.0.1:8000";
 
-function FixedMascot({ audioEl }) {
-  return createPortal(
-    <div
-      style={{
-        position: "fixed",
-        right: 16,
-        bottom: "calc(var(--composer-gap, 160px) + 16px)",
-        zIndex: 50,
-      }}
-    >
-      <Mascot audioEl={audioEl} />
-    </div>,
-    document.body
-  );
+async function waitAF(ms = 0) {
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  if (ms) await new Promise(r => setTimeout(r, ms));
+}
+function once(target, type) {
+  return new Promise(resolve => {
+    const h = () => { target.removeEventListener(type, h); resolve(); };
+    target.addEventListener(type, h, { once: true });
+  });
+}
+async function waitUntilPlayable(el) {
+  if (el.readyState >= 2) return;
+  await Promise.race([once(el, "canplay"), once(el, "loadeddata")]);
 }
 
 export default function ChatPage() {
   const [input, setInput] = useState("");
-  const [items, setItems] = useState([]); 
+  const [items, setItems] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [listening, setListening] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState(null);
@@ -33,11 +33,10 @@ export default function ChatPage() {
     () => sessionStorage.getItem("session_id") || ""
   );
 
-  
-  const audioElRef = useRef(null);
+  // global singleton audio
+  const audioEl = getMascotAudio();
   const currentUrlRef = useRef(null);
 
- 
   const askAbortRef = useRef(null);
   const sttAbortRef = useRef(null);
   const ttsAbortRef = useRef(null);
@@ -45,28 +44,26 @@ export default function ChatPage() {
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
 
-
   const listRef = useRef(null);
   const bottomRef = useRef(null);
   const composerRef = useRef(null);
 
-  function ensureAudioEl() {
-    if (!audioElRef.current) {
-      const el = new Audio();
-      el.preload = "auto";
-      el.onended = () => setSpeakingIndex(null);
-      el.onerror = () => setSpeakingIndex(null);
-      audioElRef.current = el;
-    }
-    return audioElRef.current;
-  }
+  // attach/detach page-specific handlers
+  useEffect(() => {
+    const onended = () => setSpeakingIndex(null);
+    const onerror = () => setSpeakingIndex(null);
+    audioEl.addEventListener("ended", onended);
+    audioEl.addEventListener("error", onerror);
+    publishMascotAudio(audioEl);
+    return () => {
+      audioEl.removeEventListener("ended", onended);
+      audioEl.removeEventListener("error", onerror);
+    };
+  }, [audioEl]);
 
   function stopAudio() {
-    const el = audioElRef.current;
-    if (el) {
-      try { el.pause(); } catch {}
-      try { el.currentTime = 0; } catch {}
-    }
+    try { audioEl.pause(); } catch {}
+    try { audioEl.currentTime = 0; } catch {}
     if (currentUrlRef.current) {
       try { URL.revokeObjectURL(currentUrlRef.current); } catch {}
       currentUrlRef.current = null;
@@ -77,27 +74,27 @@ export default function ChatPage() {
   async function playBlobForIndex(blob, idx) {
     if (!blob) return;
     stopAudio();
-    const el = ensureAudioEl();
     const url = URL.createObjectURL(blob);
     currentUrlRef.current = url;
-    el.src = url;
-    setSpeakingIndex(idx);
-    try { await el.play(); } catch { setSpeakingIndex(null); }
-  }
+    audioEl.src = url;
 
+    publishMascotAudio(audioEl);
+    await waitAF();
+    await waitUntilPlayable(audioEl);
+
+    setSpeakingIndex(idx);
+    try { await audioEl.play(); } catch { setSpeakingIndex(null); }
+  }
 
   async function callChat(text, signal) {
     const res = await fetch(`${API_BASE}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal,
-      body: JSON.stringify({
-        message: text,
-        session_id: sessionId || undefined,
-      }),
+      body: JSON.stringify({ message: text, session_id: sessionId || undefined }),
     });
     if (!res.ok) throw new Error(await res.text());
-    return res.json(); 
+    return res.json();
   }
 
   async function callSTT(blob, filename, signal) {
@@ -116,17 +113,15 @@ export default function ChatPage() {
       body: JSON.stringify({ text }),
       signal,
     });
-
     if (!res.ok) {
       const errText = await res.text();
       console.error("TTS /tts failed:", res.status, errText);
       throw new Error(`TTS ${res.status}: ${errText}`);
     }
-
-    return res.blob(); 
+    return res.blob();
   }
 
-  
+  // ---------- Mic (STT) ----------
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -169,20 +164,18 @@ export default function ChatPage() {
 
   function toggleListening() {
     if (!listening) {
-      stopAudio(); 
+      stopAudio();
       startRecording();
     } else {
       stopRecording();
     }
   }
 
-  
   async function handleRead(index) {
     const item = items[index];
     if (!item?.bot) return;
 
-    const el = audioElRef.current;
-    if (speakingIndex === index && el && !el.paused && !el.ended) {
+    if (speakingIndex === index && !audioEl.paused && !audioEl.ended) {
       stopAudio();
       return;
     }
@@ -208,7 +201,6 @@ export default function ChatPage() {
     }
   }
 
-  
   async function send() {
     const q = input.trim();
     if (!q) return;
@@ -230,7 +222,6 @@ export default function ChatPage() {
       }
 
       const answer = data.answer || "";
-
       let blob = null;
       try {
         ttsAbortRef.current = new AbortController();
@@ -246,7 +237,6 @@ export default function ChatPage() {
       });
 
       if (blob) await playBlobForIndex(blob, myIdx);
-
     } catch (e) {
       if (e?.name !== "AbortError") {
         setItems(prev => {
@@ -287,19 +277,16 @@ export default function ChatPage() {
     return () => window.removeEventListener("beforeunload", sendResetBeacon);
   }, []);
 
-
   useEffect(() => {
     window.__clearChatUI = () => { setItems([]); stopAudio(); };
     return () => { delete window.__clearChatUI; };
   }, []);
-
 
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
     bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
   }, [items]);
-
 
   useEffect(() => {
     const updateComposerGap = () => {
@@ -322,8 +309,6 @@ export default function ChatPage() {
       <div className="content">
         <div className="content-inner">
           <h1>AI Tutor — Ask me anything</h1>
-
-          <FixedMascot audioEl={audioElRef.current} />
 
           <ul className="messages" ref={listRef} style={{ listStyle: "none", padding: 0 }}>
             {items.map((it, i) => (
@@ -382,5 +367,3 @@ export default function ChatPage() {
     </div>
   );
 }
-
-
