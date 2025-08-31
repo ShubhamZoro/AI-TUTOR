@@ -5,7 +5,7 @@ import traceback
 from typing import Dict
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response,send_from_directory
 from flask_cors import CORS
 
 
@@ -39,8 +39,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ELEVEN_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 DEFAULT_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["https://ai-tutor-1-g7rm.onrender.com", "https://ai-tutor-1-g7rm.onrender.com"]}})
+app = Flask(__name__,static_folder="../AI_TUTOR/dist",static_url_path="/")
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173/", "http://localhost:5173/"]}})
 
 # Optional ElevenLabs client
 el = ElevenLabs(api_key=ELEVEN_API_KEY)
@@ -132,7 +132,7 @@ chat_chain_with_history = RunnableWithMessageHistory(
 # ------------ Routes ------------
 @app.get("/")
 def health():
-    return jsonify({"ok": True})
+    return send_from_directory(app.static_folder,"index.html")
 
 # /upload — Upload PDF and store in vector DB
 @app.post("/upload")
@@ -279,4 +279,5 @@ def tts():
 if __name__ == "__main__":
     # debug=True is fine for local dev; set to False in prod
     app.run(host="0.0.0.0", port=8000, debug=True)
+
 
