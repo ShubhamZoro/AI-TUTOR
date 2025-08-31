@@ -1,4 +1,3 @@
-
 import os
 import uuid
 import traceback
@@ -49,9 +48,14 @@ ASK_ONCE_LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
 CHAT_LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
 embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 
+# ------------ Persistent Chroma ------------
+# Use a folder on disk so vectors survive restarts and work across processes.
+CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_data")
+
 vector_store = Chroma(
     collection_name="pdf_collection",
     embedding_function=embeddings,
+    persist_directory=CHROMA_DIR,  # persistence is automatic in langchain_chroma
 )
 retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
@@ -61,7 +65,6 @@ TUTOR_SYSTEM_TEXT = (
     "You are a world-class tutor with PhD-level knowledge. "
     "Teach intuitively and clearly: start with a concise answer, then explain step-by-step "
     "in simple language. Use examples or analogies when helpful. Prefer bullets and short paragraphs."
-    "Answer in one word if ask."
 )
 
 # Ask Once (retrieval) prompt (ChatPromptTemplate)
@@ -70,7 +73,7 @@ QA_PROMPT = ChatPromptTemplate.from_messages(
         ("system", TUTOR_SYSTEM_TEXT + "\nUse the provided context to answer the question."),
         ("human",
          "Context:\n{context}\n\n"
-         "Question: {input}\n\n"   # <-- was {question}
+         "Question: {input}\n\n"
          "Answer as a patient, intuitive tutor. Keep it clear and step-by-step, "
          "and include an example if useful.")
     ]
@@ -129,7 +132,7 @@ chat_chain_with_history = RunnableWithMessageHistory(
 def health():
     return jsonify({"ok": True})
 
-# /upload — Upload PDF and store in vector DB
+# /upload — Upload PDF and store in vector DB (persistent)
 @app.post("/upload")
 def upload_pdf():
     file = request.files.get("file")
@@ -155,8 +158,8 @@ def upload_pdf():
     metadatas = [{"source": file.filename} for _ in chunks]
     vector_store.add_texts(chunks, metadatas=metadatas)
 
-    return jsonify({"detail": f"Stored {len(chunks)} chunks in Chroma (in-memory)"})
-
+    # NOTE: No explicit persist() here — persistence is automatic with persist_directory
+    return jsonify({"detail": f"Stored {len(chunks)} chunks in Chroma (persistent)"}), 200
 
 # /query — Ask Once (stateless but uses vector DB for context)
 @app.post("/query")
@@ -170,7 +173,6 @@ def query():
     # result has keys: "answer", "context"
     answer = result.get("answer", "")
     return jsonify({"answer": answer})
-
 
 # /chat — Stateful conversation (session + memory + optional retrieval)
 @app.post("/chat")
@@ -191,7 +193,6 @@ def chat():
     )
 
     return jsonify({"answer": answer, "session_id": session_id})
-
 
 # /stt — Speech → Text
 @app.post("/stt")
@@ -222,7 +223,6 @@ def stt():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"detail": str(e)}), 502
-
 
 # /tts — Text → Speech
 @app.post("/tts")
@@ -262,9 +262,8 @@ def tts():
             }
         }), 502
 
-
 # ------------ Run ------------
 if __name__ == "__main__":
     # debug=True is fine for local dev; set to False in prod
+    # (If you see dev reloader causing double-process issues, add use_reloader=False)
     app.run(host="0.0.0.0", port=8000, debug=True)
-
