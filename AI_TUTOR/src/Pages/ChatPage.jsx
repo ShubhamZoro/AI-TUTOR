@@ -1,31 +1,17 @@
-
-
-
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import "../index.css";
-import { getMascotAudio, publishMascotAudio } from "../lib/mascotAudio";
+import {
+  getMascotAudio,
+  playBlobThroughMascot,
+  stopMascotAudio,
+} from "../lib/mascotAudio";
 
 const API_BASE = "http://127.0.0.1:8000";
 
-async function waitAF(ms = 0) {
-  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  if (ms) await new Promise(r => setTimeout(r, ms));
-}
-function once(target, type) {
-  return new Promise(resolve => {
-    const h = () => { target.removeEventListener(type, h); resolve(); };
-    target.addEventListener(type, h, { once: true });
-  });
-}
-async function waitUntilPlayable(el) {
-  if (el.readyState >= 2) return;
-  await Promise.race([once(el, "canplay"), once(el, "loadeddata")]);
-}
-
 export default function ChatPage() {
   const [input, setInput] = useState("");
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState([]); // { user, bot, audioBlob? }
   const [isProcessing, setIsProcessing] = useState(false);
   const [listening, setListening] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState(null);
@@ -33,9 +19,8 @@ export default function ChatPage() {
     () => sessionStorage.getItem("session_id") || ""
   );
 
-  // global singleton audio
+  // Touch the global <audio> early so Mascot binds immediately.
   const audioEl = getMascotAudio();
-  const currentUrlRef = useRef(null);
 
   const askAbortRef = useRef(null);
   const sttAbortRef = useRef(null);
@@ -48,44 +33,14 @@ export default function ChatPage() {
   const bottomRef = useRef(null);
   const composerRef = useRef(null);
 
-  // attach/detach page-specific handlers
+  // Auto-reset "speakingIndex" when audio finishes so button goes back to Read
   useEffect(() => {
-    const onended = () => setSpeakingIndex(null);
-    const onerror = () => setSpeakingIndex(null);
-    audioEl.addEventListener("ended", onended);
-    audioEl.addEventListener("error", onerror);
-    publishMascotAudio(audioEl);
-    return () => {
-      audioEl.removeEventListener("ended", onended);
-      audioEl.removeEventListener("error", onerror);
-    };
+    const onEnded = () => setSpeakingIndex(null);
+    audioEl.addEventListener("ended", onEnded);
+    return () => audioEl.removeEventListener("ended", onEnded);
   }, [audioEl]);
 
-  function stopAudio() {
-    try { audioEl.pause(); } catch {}
-    try { audioEl.currentTime = 0; } catch {}
-    if (currentUrlRef.current) {
-      try { URL.revokeObjectURL(currentUrlRef.current); } catch {}
-      currentUrlRef.current = null;
-    }
-    setSpeakingIndex(null);
-  }
-
-  async function playBlobForIndex(blob, idx) {
-    if (!blob) return;
-    stopAudio();
-    const url = URL.createObjectURL(blob);
-    currentUrlRef.current = url;
-    audioEl.src = url;
-
-    publishMascotAudio(audioEl);
-    await waitAF();
-    await waitUntilPlayable(audioEl);
-
-    setSpeakingIndex(idx);
-    try { await audioEl.play(); } catch { setSpeakingIndex(null); }
-  }
-
+  /* ------------------- API helpers ------------------- */
   async function callChat(text, signal) {
     const res = await fetch(`${API_BASE}/chat`, {
       method: "POST",
@@ -94,7 +49,7 @@ export default function ChatPage() {
       body: JSON.stringify({ message: text, session_id: sessionId || undefined }),
     });
     if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return res.json(); // { answer, session_id }
   }
 
   async function callSTT(blob, filename, signal) {
@@ -103,7 +58,7 @@ export default function ChatPage() {
     form.append("language_code", "en");
     const res = await fetch(`${API_BASE}/stt`, { method: "POST", body: form, signal });
     if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return res.json(); // { text }
   }
 
   async function callTTS(text, signal) {
@@ -118,21 +73,38 @@ export default function ChatPage() {
       console.error("TTS /tts failed:", res.status, errText);
       throw new Error(`TTS ${res.status}: ${errText}`);
     }
-    return res.blob();
+    return res.blob(); // mp3 blob
   }
 
-  // ---------- Mic (STT) ----------
+  /* ------------------- audio helpers ------------------- */
+  function stopAudio() {
+    stopMascotAudio();
+    setSpeakingIndex(null);
+  }
+
+  async function playBlobForIndex(blob, idx) {
+    setSpeakingIndex(null);
+    const ok = await playBlobThroughMascot(blob);
+    setSpeakingIndex(ok ? idx : null);
+  }
+
+  /* ------------------- mic (STT) ------------------- */
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
       let mime = "audio/webm";
       if (!MediaRecorder.isTypeSupported(mime)) {
         mime = MediaRecorder.isTypeSupported("audio/ogg") ? "audio/ogg" : "audio/mp4";
       }
+
       const mr = new MediaRecorder(stream, { mimeType: mime });
       chunksRef.current = [];
 
-      mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
       mr.onstop = async () => {
         try {
           const blob = new Blob(chunksRef.current, { type: mr.mimeType });
@@ -164,13 +136,14 @@ export default function ChatPage() {
 
   function toggleListening() {
     if (!listening) {
-      stopAudio();
+      stopAudio(); // make sure TTS is stopped before mic capture
       startRecording();
     } else {
       stopRecording();
     }
   }
 
+  /* ------------------- TTS (Read button) ------------------- */
   async function handleRead(index) {
     const item = items[index];
     if (!item?.bot) return;
@@ -188,7 +161,7 @@ export default function ChatPage() {
     try {
       ttsAbortRef.current = new AbortController();
       const blob = await callTTS(item.bot, ttsAbortRef.current.signal);
-      setItems(prev => {
+      setItems((prev) => {
         const next = [...prev];
         next[index] = { ...next[index], audioBlob: blob };
         return next;
@@ -201,6 +174,7 @@ export default function ChatPage() {
     }
   }
 
+  /* ------------------- send message ------------------- */
   async function send() {
     const q = input.trim();
     if (!q) return;
@@ -210,7 +184,7 @@ export default function ChatPage() {
     setInput("");
 
     const myIdx = items.length;
-    setItems(prev => [...prev, { user: q, bot: null, audioBlob: null }]);
+    setItems((prev) => [...prev, { user: q, bot: null, audioBlob: null }]);
 
     try {
       askAbortRef.current = new AbortController();
@@ -222,6 +196,7 @@ export default function ChatPage() {
       }
 
       const answer = data.answer || "";
+
       let blob = null;
       try {
         ttsAbortRef.current = new AbortController();
@@ -230,7 +205,7 @@ export default function ChatPage() {
         ttsAbortRef.current = null;
       }
 
-      setItems(prev => {
+      setItems((prev) => {
         const next = [...prev];
         next[myIdx] = { ...next[myIdx], bot: answer, audioBlob: blob };
         return next;
@@ -239,7 +214,7 @@ export default function ChatPage() {
       if (blob) await playBlobForIndex(blob, myIdx);
     } catch (e) {
       if (e?.name !== "AbortError") {
-        setItems(prev => {
+        setItems((prev) => {
           const next = [...prev];
           next[myIdx] = { ...next[myIdx], bot: "⚠️ Error fetching reply.", audioBlob: null };
           return next;
@@ -262,6 +237,7 @@ export default function ChatPage() {
     setIsProcessing(false);
   }
 
+  /* ------------------- effects ------------------- */
   useEffect(() => {
     function sendResetBeacon() {
       const sid = sessionStorage.getItem("session_id");
@@ -304,6 +280,7 @@ export default function ChatPage() {
     };
   }, []);
 
+  /* ------------------- UI ------------------- */
   return (
     <div className="page-with-sidebar">
       <div className="content">
