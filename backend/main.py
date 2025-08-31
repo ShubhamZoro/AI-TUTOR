@@ -52,6 +52,9 @@ embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 # Use a folder on disk so vectors survive restarts and work across processes.
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_data")
 
+# Ensure the directory exists
+os.makedirs(CHROMA_DIR, exist_ok=True)
+
 vector_store = Chroma(
     collection_name="pdf_collection",
     embedding_function=embeddings,
@@ -139,33 +142,45 @@ def upload_pdf():
     if not file or not file.filename.lower().endswith(".pdf"):
         return jsonify({"detail": "Only PDF allowed"}), 400
 
+    # Reset file pointer to beginning
+    file.seek(0)
+    
     reader = PdfReader(file)
     text = ""
     for page in reader.pages:
         try:
-            t = page.extract_text() or ""
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
         except Exception:
-            t = ""
-        if t:
-            text += t + "\n"
+            continue
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    if not text.strip():
+        return jsonify({"detail": "No extractable text found in PDF"}), 400
+
+    # Use larger chunks to capture more context
+    splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=400)
     chunks = splitter.split_text(text)
 
     if not chunks:
-        return jsonify({"detail": "No extractable text found in PDF"}), 400
+        return jsonify({"detail": "No chunks created from PDF text"}), 400
 
+    # Reset collection to clear old data
+    vector_store.reset_collection()
+    
     metadatas = [{"source": file.filename} for _ in chunks]
     vector_store.add_texts(chunks, metadatas=metadatas)
 
-    # NOTE: No explicit persist() here — persistence is automatic with persist_directory
-    return jsonify({"detail": f"Stored {len(chunks)} chunks in Chroma (persistent)"}), 200
+    return jsonify({"detail": f"PDF uploaded successfully. {len(chunks)} chunks stored."}), 200
 
 # /query — Ask Once (stateless but uses vector DB for context)
 @app.post("/query")
 def query():
     payload = request.get_json(silent=True) or {}
     question = payload.get("question")
+
+    if not question:
+        return jsonify({"detail": "No question provided"}), 400
 
     # New retrieval chain API
     result = qa_chain.invoke({"input": question})
@@ -264,6 +279,4 @@ def tts():
 
 # ------------ Run ------------
 if __name__ == "__main__":
-    # debug=True is fine for local dev; set to False in prod
-    # (If you see dev reloader causing double-process issues, add use_reloader=False)
     app.run(host="0.0.0.0", port=8000, debug=True)
