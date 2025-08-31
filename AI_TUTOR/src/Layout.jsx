@@ -15,7 +15,7 @@ export default function Layout() {
 
   useEffect(() => {
     setHideDock(true);
-    const t = setTimeout(() => setHideDock(false), 320);
+    const t = setTimeout(() => setHideDock(false), 320); // sync with CSS 0.28s
     return () => clearTimeout(t);
   }, [location.pathname]);
 
@@ -30,6 +30,17 @@ export default function Layout() {
     []
   );
 
+  // Reactively receive the current audio element from pages
+  const [audioEl, setAudioEl] = useState(null);
+  useEffect(() => {
+    const handler = () => {
+      setAudioEl(typeof window !== "undefined" ? window.__mascotAudioEl || null : null);
+    };
+    handler(); // initial grab
+    window.addEventListener("mascot-audio-el-change", handler);
+    return () => window.removeEventListener("mascot-audio-el-change", handler);
+  }, []);
+
   return (
     <div className="layout">
       <Sidebar onNewChat={handleNewChat} />
@@ -43,7 +54,7 @@ export default function Layout() {
         style={dockStyle}
         aria-hidden="true"
       >
-        <Mascot size={220} />
+        <Mascot size={220} audioEl={audioEl} />
       </div>
     </div>
   );
