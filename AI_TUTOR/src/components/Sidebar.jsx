@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = "https://ai-tutor-p0jv.onrender.com";
 
 
 async function resetServerMemoryIfAny() {
@@ -128,3 +128,4 @@ async function goAskOnce(e) {
     </aside>
   );
 }
+
