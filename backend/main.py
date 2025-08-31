@@ -60,7 +60,7 @@ retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
 # ------------ System / Prompting ------------
 TUTOR_SYSTEM_TEXT = (
-    "Respond in a format understandable by the eleven_multilingual_v2 model. "
+    "Respond in a format understandable by the eleven_multilingual_v2 model."
     "You are a world-class tutor with PhD-level knowledge. "
     "Teach intuitively and clearly: start with a concise answer, then explain step-by-step "
     "in simple language. Use examples or analogies when helpful. Prefer bullets and short paragraphs."
@@ -168,9 +168,7 @@ def upload_pdf():
 @app.post("/query")
 def query():
     payload = request.get_json(silent=True) or {}
-    question = (payload.get("question") or "").strip()
-    if not question:
-        return jsonify({"detail": "Missing 'question'"}), 400
+    question = payload.get("question")
 
     # New retrieval chain API
     result = qa_chain.invoke({"input": question})
@@ -184,9 +182,7 @@ def query():
 @app.post("/chat")
 def chat():
     payload = request.get_json(silent=True) or {}
-    message = (payload.get("message") or "").strip()
-    if not message:
-        return jsonify({"detail": "Missing 'message'"}), 400
+    message = payload.get("message")
 
     session_id = payload.get("session_id") or str(uuid.uuid4())
 
@@ -207,8 +203,6 @@ def chat():
 @app.post("/stt")
 def stt():
     f = request.files.get("file")
-    if not f:
-        return jsonify({"detail": "Missing audio file"}), 400
 
     audio_bytes = f.read()
 
@@ -240,9 +234,7 @@ def stt():
 @app.post("/tts")
 def tts():
     payload = request.get_json(silent=True) or {}
-    text = (payload.get("text") or "").strip()
-    if not text:
-        return jsonify({"detail": "Missing 'text'"}), 400
+    text = payload.get("text")
 
     voice_id = DEFAULT_VOICE_ID
     model_id = "eleven_multilingual_v2"
