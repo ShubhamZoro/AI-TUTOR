@@ -1,0 +1,12 @@
+Flask
+flask-cors
+python-dotenv
+langchain
+langchain-core
+langchain-openai
+langchain-community
+langchain-chroma
+chromadb
+PyPDF2
+elevenlabs
+gunicorn
