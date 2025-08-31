@@ -5,10 +5,10 @@ import traceback
 from typing import Dict
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, Response,send_from_directory
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
-
+# ---- LangChain / OpenAI (current APIs) ----
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -17,18 +17,18 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-
+# Retrieval (new-style)
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 
 from langchain_chroma import Chroma
 
-
+# Chat history (per-session, in-memory)
 from langchain_community.chat_message_histories import ChatMessageHistory
 
 from PyPDF2 import PdfReader
 
-
+# ---- ElevenLabs (STT/TTS) ----
 from elevenlabs.client import ElevenLabs
 from elevenlabs import VoiceSettings
 
@@ -39,8 +39,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ELEVEN_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 DEFAULT_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
-app = Flask(__name__,static_folder="../AI_TUTOR/dist",static_url_path="/")
-CORS(app, resources={r"/*": {"origins": ["http://localhost:5173/", "http://localhost:5173/"]}})
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}})
 
 # Optional ElevenLabs client
 el = ElevenLabs(api_key=ELEVEN_API_KEY)
@@ -64,6 +64,7 @@ TUTOR_SYSTEM_TEXT = (
     "You are a world-class tutor with PhD-level knowledge. "
     "Teach intuitively and clearly: start with a concise answer, then explain step-by-step "
     "in simple language. Use examples or analogies when helpful. Prefer bullets and short paragraphs."
+    "Answer in one word if ask."
 )
 
 # Ask Once (retrieval) prompt (ChatPromptTemplate)
@@ -72,7 +73,7 @@ QA_PROMPT = ChatPromptTemplate.from_messages(
         ("system", TUTOR_SYSTEM_TEXT + "\nUse the provided context to answer the question."),
         ("human",
          "Context:\n{context}\n\n"
-         "Question: {question}\n\n"
+         "Question: {input}\n\n"   # <-- was {question}
          "Answer as a patient, intuitive tutor. Keep it clear and step-by-step, "
          "and include an example if useful.")
     ]
@@ -132,7 +133,7 @@ chat_chain_with_history = RunnableWithMessageHistory(
 # ------------ Routes ------------
 @app.get("/")
 def health():
-    return send_from_directory(app.static_folder,"index.html")
+    return jsonify({"ok": True})
 
 # /upload — Upload PDF and store in vector DB
 @app.post("/upload")
@@ -173,6 +174,7 @@ def query():
 
     # New retrieval chain API
     result = qa_chain.invoke({"input": question})
+
     # result has keys: "answer", "context"
     answer = result.get("answer", "")
     return jsonify({"answer": answer})
@@ -279,5 +281,3 @@ def tts():
 if __name__ == "__main__":
     # debug=True is fine for local dev; set to False in prod
     app.run(host="0.0.0.0", port=8000, debug=True)
-
-
