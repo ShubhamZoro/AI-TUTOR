@@ -1,51 +1,26 @@
 
 
+
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import "../index.css";
-import { getMascotAudio, publishMascotAudio } from "../lib/mascotAudio";
+import {
+  getMascotAudio,
+  playBlobThroughMascot,
+  stopMascotAudio,
+} from "../lib/mascotAudio";
 
 const API_BASE = "http://127.0.0.1:8000";
 
-async function waitAF(ms = 0) {
-  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  if (ms) await new Promise(r => setTimeout(r, ms));
-}
-function once(target, type) {
-  return new Promise(resolve => {
-    const h = () => { target.removeEventListener(type, h); resolve(); };
-    target.addEventListener(type, h, { once: true });
-  });
-}
-async function waitUntilPlayable(el) {
-  if (el.readyState >= 2) return;
-  await Promise.race([once(el, "canplay"), once(el, "loadeddata")]);
-}
-
 export default function AskOncePage() {
   const [q, setQ] = useState("");
-  const [pair, setPair] = useState(null);
+  const [pair, setPair] = useState(null); // { user, bot, audioBlob }
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
 
-  // use the global singleton, not a per-page ref
+  // Touch the global <audio> early so Mascot binds immediately.
   const audioEl = getMascotAudio();
-  const currentUrlRef = useRef(null);
-
-  // attach/detach page-specific handlers
-  useEffect(() => {
-    const onended = () => setSpeaking(false);
-    const onerror = () => setSpeaking(false);
-    audioEl.addEventListener("ended", onended);
-    audioEl.addEventListener("error", onerror);
-    // (re)publish in case this page mounted first
-    publishMascotAudio(audioEl);
-    return () => {
-      audioEl.removeEventListener("ended", onended);
-      audioEl.removeEventListener("error", onerror);
-    };
-  }, [audioEl]);
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -54,32 +29,14 @@ export default function AskOncePage() {
   const listRef = useRef(null);
   const bottomRef = useRef(null);
 
-  function stopAudio() {
-    try { audioEl.pause(); } catch {}
-    try { audioEl.currentTime = 0; } catch {}
-    if (currentUrlRef.current) {
-      try { URL.revokeObjectURL(currentUrlRef.current); } catch {}
-      currentUrlRef.current = null;
-    }
-    setSpeaking(false);
-  }
+  // Auto-reset "speaking" when audio finishes so button goes back to Read
+  useEffect(() => {
+    const onEnded = () => setSpeaking(false);
+    audioEl.addEventListener("ended", onEnded);
+    return () => audioEl.removeEventListener("ended", onEnded);
+  }, [audioEl]);
 
-  async function playBlob(blob) {
-    if (!blob) return;
-    stopAudio();
-    const url = URL.createObjectURL(blob);
-    currentUrlRef.current = url;
-    audioEl.src = url;
-
-    // make sure Mascot has the element & had a render tick
-    publishMascotAudio(audioEl);
-    await waitAF();
-    await waitUntilPlayable(audioEl);
-
-    setSpeaking(true);
-    try { await audioEl.play(); } catch { setSpeaking(false); }
-  }
-
+  // ---------- API helpers ----------
   async function callQuery(question) {
     const res = await fetch(`${API_BASE}/query`, {
       method: "POST",
@@ -87,7 +44,7 @@ export default function AskOncePage() {
       body: JSON.stringify({ question }),
     });
     if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return res.json(); // { answer }
   }
 
   async function callSTT(blob, filename = "recording.webm") {
@@ -96,7 +53,7 @@ export default function AskOncePage() {
     form.append("language_code", "en");
     const res = await fetch(`${API_BASE}/stt`, { method: "POST", body: form });
     if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return res.json(); // { text }
   }
 
   async function callTTS(text) {
@@ -111,16 +68,29 @@ export default function AskOncePage() {
       console.error("TTS /tts failed:", res.status, body);
       throw new Error(body.detail || `TTS ${res.status}`);
     }
-    return res.blob();
+    return res.blob(); // mp3 blob
   }
 
-  // ---------- Mic (STT) ----------
+  // ---------- audio helpers ----------
+  function stopAudio() {
+    stopMascotAudio();
+    setSpeaking(false);
+  }
+
+  async function playBlob(blob) {
+    setSpeaking(false);
+    const ok = await playBlobThroughMascot(blob);
+    setSpeaking(ok);
+  }
+
+  // ---------- mic (STT) ----------
   async function startRecording() {
     try {
       if (!("MediaRecorder" in window)) {
         alert("MediaRecorder not supported in this browser.");
         return;
       }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       let mime = "audio/webm";
@@ -131,7 +101,10 @@ export default function AskOncePage() {
       const mr = new MediaRecorder(stream, { mimeType: mime });
       chunksRef.current = [];
 
-      mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
       mr.onstop = async () => {
         try {
           const blob = new Blob(chunksRef.current, { type: mr.mimeType });
@@ -161,13 +134,14 @@ export default function AskOncePage() {
 
   function toggleListening() {
     if (!listening) {
-      stopAudio();
+      stopAudio(); // ensure TTS is stopped before mic capture
       startRecording();
     } else {
       stopRecording();
     }
   }
 
+  // ---------- ask once ----------
   async function ask() {
     const question = q.trim();
     if (!question || loading) return;
@@ -189,7 +163,10 @@ export default function AskOncePage() {
       setPair({ user: question, bot: "⚠️ Error while querying.", audioBlob: null });
     } finally {
       setLoading(false);
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" }), 0);
+      setTimeout(
+        () => bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" }),
+        0
+      );
     }
   }
 
@@ -202,6 +179,7 @@ export default function AskOncePage() {
     }
   }
 
+  // ---------- effects ----------
   useEffect(() => {
     const setGap = () => {
       const h = composerRef.current?.offsetHeight || 140;
@@ -220,10 +198,9 @@ export default function AskOncePage() {
   useEffect(() => {
     return () => {
       if (mediaRecorderRef.current?.stream) {
-        mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+        mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
       }
-      stopAudio();
-      // do NOT null the global; the docked Mascot depends on it
+      stopAudio(); // do NOT revoke URLs here; singleton manages them
     };
   }, []);
 
@@ -238,6 +215,7 @@ export default function AskOncePage() {
     bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
   }, [pair]);
 
+  // ---------- UI ----------
   return (
     <div className="page-with-sidebar">
       <div className="content">
@@ -295,3 +273,4 @@ export default function AskOncePage() {
     </div>
   );
 }
+
