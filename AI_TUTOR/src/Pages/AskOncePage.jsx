@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import "../index.css";
 import Mascot from "../components/Mascot.jsx";
 
-const API_BASE ="https://ai-tutor-p0jv.onrender.com;
+const API_BASE ="https://ai-tutor-p0jv.onrender.com";
 
 function FixedMascot({ audioEl }) {
   return createPortal(
@@ -301,5 +301,6 @@ export default function AskOncePage() {
     </div>
   );
 }
+
 
 
