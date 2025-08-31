@@ -1,6 +1,3 @@
-
-
-
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Environment, OrbitControls, useGLTF, Center } from "@react-three/drei";
 import { useEffect, useMemo, useRef } from "react";
