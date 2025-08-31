@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import "../index.css";
 import Mascot from "../components/Mascot.jsx";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = "https://ai-tutor-p0jv.onrender.com";
 
 function FixedMascot({ audioEl }) {
   return createPortal(
@@ -382,5 +382,6 @@ export default function ChatPage() {
     </div>
   );
 }
+
 
 
