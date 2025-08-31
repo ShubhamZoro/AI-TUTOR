@@ -40,7 +40,7 @@ ELEVEN_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 DEFAULT_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}})
+CORS(app, resources={r"/*": {"origins": ["https://ai-tutor-1-g7rm.onrender.com", "https://ai-tutor-1-g7rm.onrender.com"]}})
 
 # Optional ElevenLabs client
 el = ElevenLabs(api_key=ELEVEN_API_KEY)
@@ -279,3 +279,4 @@ def tts():
 if __name__ == "__main__":
     # debug=True is fine for local dev; set to False in prod
     app.run(host="0.0.0.0", port=8000, debug=True)
+
